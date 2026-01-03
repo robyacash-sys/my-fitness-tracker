@@ -187,9 +187,20 @@
     <div id="toast" class="fixed bottom-10 left-1/2 transform -translate-x-1/2 bg-gray-900 text-white px-8 py-3 rounded-full opacity-0 transition-all duration-300 pointer-events-none z-50"></div>
 
     <script>
-        const firebaseConfig = JSON.parse(__firebase_config);
+        const firebaseConfig = {
+          apiKey: "AIzaSyAs-v65r79fC-fAclhWn-5A_lK6uYhN-8s",
+          authDomain: "v0777-fitness.firebaseapp.com",
+          projectId: "v0777-fitness",
+          storageBucket: "v0777-fitness.appspot.com",
+          messagingSenderId: "598739527773",
+          appId: "1:598739527773:web:96e8e898f68ed6568c0919",
+          measurementId: "G-GNS9733NMB"
+        };
+
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'fitness-pro-photo-v1';
 
+        // 注意：因为你在头部引入的是 compat 版本 (firebase-app-compat.js)，
+        // 所以初始化语法请严格使用下面的格式：
         firebase.initializeApp(firebaseConfig);
         const db = firebase.firestore();
         const auth = firebase.auth();
