@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>高级饮食训练追踪助手 - 拍照版</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Firebase SDKs (Compatibility Mode) -->
+    <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore-compat.js"></script>
+    <style>
+        body { background-color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+        .card { background: white; border-radius: 1rem; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); border: 1px solid #f1f5f9; }
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #f1f5f9; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+        #loadingOverlay { position: fixed; inset: 0; background: rgba(255,255,255,0.95); z-index: 100; display: flex; flex-direction: column; align-items: center; justify-content: center; transition: opacity 0.5s; }
+        .spinner { border: 4px solid #f3f3f3; border-top: 4px solid #6366f1; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .modal-bg { position: fixed; inset: 0; z-index: 50; display: none; align-items: center; justify-content: center; backdrop-blur-sm; background: rgba(0,0,0,0.4); }
+        .photo-preview { width: 100%; height: 200px; object-fit: cover; border-radius: 0.75rem; background: #f1f5f9; cursor: pointer; transition: filter 0.2s; }
+        .photo-preview:hover { filter: brightness(0.9); }
+        .photo-upload-box { height: 200px; border-radius: 0.75rem; cursor: pointer; transition: all 0.2s; }
+        .photo-upload-box:hover { border-color: #6366f1; background-color: #f5f7ff; }
+    </style>
+</head>
+<body class="p-4 md:p-8">
+    <!-- 全局加载遮罩 -->
+    <div id="loadingOverlay">
+        <div class="spinner mb-4"></div>
+        <p id="loadingText" class="text-gray-500 font-medium">正在连接服务器...</p>
+    </div>
+
+    <div class="max-w-5xl mx-auto">
+        <!-- Header -->
+        <header class="mb-8 flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div>
+                <h1 class="text-3xl font-bold text-gray-800 text-indigo-600">🍎 健身追踪Pro</h1>
+                <div class="flex items-center gap-2 mt-2">
+                    <input type="date" id="datePicker" onchange="handleDateChange()" class="bg-indigo-50 text-indigo-700 font-medium px-3 py-1 rounded-lg border-none focus:ring-2 focus:ring-indigo-500 outline-none cursor-pointer">
+                    <span id="syncStatus" class="text-[10px] bg-gray-100 text-gray-400 px-2 py-1 rounded-md">检查连接中...</span>
+                </div>
+            </div>
+            <div class="flex items-center gap-3">
+                <div id="userDisplay" class="hidden text-right">
+                    <p class="text-xs text-gray-400">当前账户</p>
+                    <p id="userEmail" class="text-sm font-medium text-gray-700"></p>
+                </div>
+                <button id="loginBtn" onclick="openAuthModal()" class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg transition text-sm font-medium">登录/注册</button>
+                <button id="logoutBtn" onclick="handleLogout()" class="hidden bg-gray-100 hover:bg-gray-200 text-gray-600 px-4 py-2 rounded-lg transition text-sm">退出</button>
+                <button onclick="toggleSettings()" class="bg-gray-800 hover:bg-gray-900 text-white px-4 py-2 rounded-lg transition text-sm">⚙️ 设置</button>
+            </div>
+        </header>
+
+        <!-- 主内容区 -->
+        <div id="mainContent" class="opacity-50 pointer-events-none transition-opacity duration-500">
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div class="lg:col-span-2 space-y-6">
+                    <!-- 任务核对 -->
+                    <div class="card p-6 border-t-4 border-indigo-500">
+                        <h2 class="text-xl font-semibold text-gray-700 mb-4 flex items-center justify-between">
+                            <div class="flex items-center gap-2">
+                                <span>📅 任务核对</span>
+                                <span id="dayScore" class="text-xs px-2 py-1 rounded-full text-center font-bold">--</span>
+                            </div>
+                            <span id="selectedDateLabel" class="text-sm font-normal text-gray-400"></span>
+                        </h2>
+                        <div id="dynamicChecklist" class="space-y-6"></div>
+                        <button onclick="saveToCloud()" class="mt-8 w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 rounded-xl shadow-lg transition-all active:scale-95">
+                            保存同步数据
+                        </button>
+                    </div>
+
+                    <!-- 体重与照片记录 -->
+                    <div class="card p-6">
+                        <h2 class="text-xl font-semibold text-gray-700 mb-4 flex items-center gap-2">
+                            <span>📈 体重与体型记录</span>
+                            <span class="text-[10px] bg-emerald-100 text-emerald-600 px-2 py-0.5 rounded font-bold uppercase">点击预览图上传照片</span>
+                        </h2>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                            <div class="flex flex-col justify-center space-y-4">
+                                <div>
+                                    <label class="block text-xs font-bold text-gray-400 mb-1">今日体重 (kg)</label>
+                                    <input type="number" id="weightInput" step="0.1" placeholder="例如: 70.5" class="w-full border border-gray-200 rounded-lg px-4 py-3 text-lg font-bold outline-none focus:border-indigo-500">
+                                </div>
+                                <button onclick="addWeightAndPhoto()" class="w-full bg-emerald-500 hover:bg-emerald-600 text-white px-6 py-3 rounded-xl transition font-bold shadow-md shadow-emerald-100">确认记录</button>
+                                <p class="text-[10px] text-gray-400 text-center">点击右侧方块可以拍摄或上传体型照片</p>
+                            </div>
+                            <div class="relative group">
+                                <input type="file" id="fileInput" accept="image/*" class="hidden" onchange="handleFileUpload(event)">
+                                <div id="photoContainer" onclick="document.getElementById('fileInput').click()" class="photo-upload-box bg-gray-50 flex flex-col items-center justify-center border-2 border-dashed border-gray-200">
+                                    <img id="todayPhotoPreview" src="" alt="体型预览" class="photo-preview hidden">
+                                    <div id="photoPlaceholder" class="text-gray-400 flex flex-col items-center">
+                                        <div class="p-4 bg-white rounded-full shadow-sm mb-3">
+                                            <svg class="w-8 h-8 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+                                        </div>
+                                        <p class="text-sm font-medium">点击拍摄/上传照片</p>
+                                        <p class="text-[10px] mt-1">(可选)</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="h-64"><canvas id="weightChart"></canvas></div>
+                    </div>
+                </div>
+
+                <!-- 侧边栏 -->
+                <div class="space-y-6">
+                    <!-- 统计面板 -->
+                    <div class="card p-6 bg-gradient-to-br from-indigo-600 to-blue-700 text-white shadow-xl shadow-indigo-100">
+                        <h3 class="font-bold opacity-80 mb-4 uppercase tracking-wider text-sm">概览统计</h3>
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <p class="text-3xl font-black" id="statCompletion">0%</p>
+                                <p class="text-xs opacity-70">任务完成率</p>
+                            </div>
+                            <div>
+                                <p class="text-3xl font-black" id="statWeightChange">--</p>
+                                <p class="text-xs opacity-70">体重变化</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 体型相册 (最近) -->
+                    <div class="card p-6">
+                        <h3 class="font-bold text-gray-700 mb-4 flex justify-between items-center">
+                            <span>🖼️ 体型快照</span>
+                            <span class="text-[10px] text-gray-400">最近 3 次</span>
+                        </h3>
+                        <div id="photoGallery" class="grid grid-cols-1 gap-4">
+                            <p class="text-center text-gray-300 text-xs py-4">暂无照片记录</p>
+                        </div>
+                    </div>
+
+                    <!-- 历史记录列表 -->
+                    <div class="card p-6">
+                        <h3 class="font-bold text-gray-700 mb-4">最近记录</h3>
+                        <div id="historyLogs" class="space-y-3 max-h-80 overflow-y-auto custom-scrollbar pr-2 text-sm"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 账户模态框 -->
+    <div id="authModal" class="modal-bg">
+        <div class="card w-full max-w-sm p-8 m-4">
+            <h2 class="text-2xl font-bold text-gray-800 mb-2">账户管理</h2>
+            <p class="text-gray-400 text-sm mb-6">同步您的健身数据</p>
+            <div class="space-y-4">
+                <div class="p-3 bg-indigo-50 border border-indigo-100 rounded-lg text-indigo-700 text-[10px]">
+                    开启同步后，您可以从任何设备访问照片和记录。
+                </div>
+                <div>
+                    <label class="block text-xs font-bold text-gray-400 mb-1">邮箱地址</label>
+                    <input type="email" id="authEmail" placeholder="example@mail.com" class="w-full p-3 bg-gray-50 border border-gray-100 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500">
+                </div>
+                <div>
+                    <label class="block text-xs font-bold text-gray-400 mb-1">密码 (至少6位)</label>
+                    <input type="password" id="authPass" placeholder="••••••" class="w-full p-3 bg-gray-50 border border-gray-100 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500">
+                </div>
+                <div id="authErrorMessage" class="text-red-500 text-xs hidden"></div>
+                <div class="flex gap-2 pt-2">
+                    <button onclick="handleAuth('login')" class="flex-1 bg-indigo-600 text-white py-3 rounded-xl font-bold hover:bg-indigo-700 transition">登录</button>
+                    <button onclick="handleAuth('register')" class="flex-1 border border-indigo-600 text-indigo-600 py-3 rounded-xl font-bold hover:bg-indigo-50 transition">注册</button>
+                </div>
+                <button onclick="closeAuthModal()" class="w-full text-gray-400 text-sm py-2">稍后再说</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 配置模态框 -->
+    <div id="settingsModal" class="modal-bg">
+        <div class="card w-full max-w-lg p-6 max-h-[90vh] overflow-y-auto">
+            <div class="flex justify-between items-center mb-6">
+                <h2 class="text-2xl font-bold text-gray-800">定制计划</h2>
+                <button onclick="toggleSettings()" class="text-gray-400 hover:text-gray-600">✕</button>
+            </div>
+            <div id="dietSettingsList" class="space-y-2 mb-6"></div>
+            <div id="workoutSettingsList" class="space-y-2 mb-6"></div>
+            <button onclick="toggleSettings()" class="w-full bg-indigo-600 text-white py-4 rounded-xl font-bold shadow-lg shadow-indigo-100">完成设置</button>
+        </div>
+    </div>
+
+    <div id="toast" class="fixed bottom-10 left-1/2 transform -translate-x-1/2 bg-gray-900 text-white px-8 py-3 rounded-full opacity-0 transition-all duration-300 pointer-events-none z-50"></div>
+
+    <script>
+        const firebaseConfig = JSON.parse(__firebase_config);
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'fitness-pro-photo-v1';
+
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.firestore();
+        const auth = firebase.auth();
+
+        let currentUser = null;
+        let selectedDate = new Date().toISOString().split('T')[0];
+        let currentPhotoBase64 = null;
+        let unsubscribeData = null;
+        
+        let appData = {
+            config: {
+                diet: [
+                    "早餐：2个全蛋 + 1个蛋白 + 50g燕麦片 + 200ml无糖豆浆/脱脂奶", 
+                    "午餐：150g鸡胸肉/瘦牛肉 + 150g糙米饭 + 250g绿叶蔬菜（少油）", 
+                    "加餐：一个苹果 / 20g原味坚果 / 一份乳清蛋白粉", 
+                    "晚餐：150g清蒸鱼/虾仁 + 一份大拌菜（醋汁）+ 半个紫薯（约80g）",
+                    "每日 2L 水",
+                    "睡眠质量是否达标"
+                ],
+                workout: ["每日步数 > 8000", "训练 30-60 分钟"]
+            },
+            dailyLogs: {},
+            weightLogs: [] 
+        };
+
+        let weightChart = null;
+
+        function openAuthModal() { 
+            document.getElementById('authErrorMessage').classList.add('hidden');
+            document.getElementById('authModal').style.display = 'flex'; 
+        }
+        function closeAuthModal() { document.getElementById('authModal').style.display = 'none'; }
+
+        async function handleAuth(type) {
+            const email = document.getElementById('authEmail').value.trim();
+            const pass = document.getElementById('authPass').value;
+            const errorEl = document.getElementById('authErrorMessage');
+            
+            if (!email || pass.length < 6) {
+                errorEl.innerText = "请输入有效邮箱和至少6位密码";
+                errorEl.classList.remove('hidden');
+                return;
+            }
+
+            try {
+                errorEl.classList.add('hidden');
+                document.getElementById('loadingOverlay').style.display = 'flex';
+                if (type === 'register') await auth.createUserWithEmailAndPassword(email, pass);
+                else await auth.signInWithEmailAndPassword(email, pass);
+                closeAuthModal();
+            } catch (err) {
+                document.getElementById('loadingOverlay').style.display = 'none';
+                errorEl.innerText = err.message;
+                errorEl.classList.remove('hidden');
+            }
+        }
+
+        async function handleLogout() {
+            if (unsubscribeData) unsubscribeData();
+            await auth.signOut();
+            window.location.reload();
+        }
+
+        auth.onAuthStateChanged(async user => {
+            const loadingOverlay = document.getElementById('loadingOverlay');
+            const mainContent = document.getElementById('mainContent');
+            const loginBtn = document.getElementById('loginBtn');
+            const logoutBtn = document.getElementById('logoutBtn');
+            const userDisplay = document.getElementById('userDisplay');
+            const userEmailText = document.getElementById('userEmail');
+
+            if (user) {
+                currentUser = user;
+                loginBtn.classList.add('hidden');
+                logoutBtn.classList.remove('hidden');
+                userDisplay.classList.remove('hidden');
+                userEmailText.innerText = user.isAnonymous ? "匿名访客" : user.email;
+                mainContent.style.opacity = '1';
+                mainContent.style.pointerEvents = 'auto';
+                loadUserData();
+            } else {
+                try {
+                    await auth.signInAnonymously();
+                } catch (e) {
+                    loadingOverlay.style.display = 'none';
+                    openAuthModal();
+                }
+            }
+        });
+
+        function loadUserData() {
+            if (!currentUser) return;
+            const docRef = db.doc(`artifacts/${appId}/users/${currentUser.uid}/settings/main`);
+            if (unsubscribeData) unsubscribeData();
+            
+            unsubscribeData = docRef.onSnapshot(doc => {
+                if (doc.exists) {
+                    const data = doc.data();
+                    appData = {
+                        ...appData,
+                        ...data,
+                        config: { ...appData.config, ...(data.config || {}) }
+                    };
+                    appData.weightLogs.sort((a, b) => new Date(a.date) - new Date(b.date));
+                    updateUI();
+                } else {
+                    saveToCloud(); 
+                }
+                document.getElementById('loadingOverlay').style.display = 'none';
+                document.getElementById('syncStatus').innerText = "云端同步中";
+            }, err => {
+                showToast("连接失败，请刷新");
+            });
+        }
+
+        async function saveToCloud() {
+            if (!currentUser) return;
+            const docRef = db.doc(`artifacts/${appId}/users/${currentUser.uid}/settings/main`);
+            try {
+                await docRef.set(appData);
+                document.getElementById('syncStatus').innerText = "已同步";
+                showToast("同步成功");
+            } catch (err) {
+                showToast("保存失败");
+            }
+        }
+
+        function handleFileUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            if (file.size > 1024 * 1024) {
+                showToast("图片太大（请小于 1MB）");
+                return;
+            }
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                currentPhotoBase64 = e.target.result;
+                displayCurrentPhoto();
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function displayCurrentPhoto() {
+            const img = document.getElementById('todayPhotoPreview');
+            const placeholder = document.getElementById('photoPlaceholder');
+            if (currentPhotoBase64) {
+                img.src = currentPhotoBase64;
+                img.classList.remove('hidden');
+                placeholder.classList.add('hidden');
+            } else {
+                img.classList.add('hidden');
+                placeholder.classList.remove('hidden');
+            }
+        }
+
+        function updateUI() {
+            renderChecklist();
+            renderHistory();
+            renderSettings();
+            renderGallery();
+            updateStats();
+            const weightEntry = appData.weightLogs.find(l => l.date === selectedDate);
+            document.getElementById('weightInput').value = weightEntry ? weightEntry.value : '';
+            currentPhotoBase64 = weightEntry ? weightEntry.photo : null;
+            displayCurrentPhoto();
+            if (weightChart) updateChart(); else initChart();
+            document.getElementById('selectedDateLabel').innerText = selectedDate;
+        }
+
+        function handleDateChange() {
+            selectedDate = document.getElementById('datePicker').value;
+            updateUI();
+        }
+
+        function addWeightAndPhoto() {
+            const weight = parseFloat(document.getElementById('weightInput').value);
+            if (isNaN(weight)) {
+                showToast("请输入有效体重");
+                return;
+            }
+            appData.weightLogs = appData.weightLogs.filter(l => l.date !== selectedDate);
+            appData.weightLogs.push({ 
+                date: selectedDate, 
+                value: weight, 
+                photo: currentPhotoBase64 
+            });
+            appData.weightLogs.sort((a, b) => new Date(a.date) - new Date(b.date));
+            saveToCloud();
+        }
+
+        function renderGallery() {
+            const container = document.getElementById('photoGallery');
+            const photosWithDate = appData.weightLogs
+                .filter(l => l.photo)
+                .slice(-3)
+                .reverse();
+            if (photosWithDate.length === 0) {
+                container.innerHTML = '<p class="text-center text-gray-300 text-xs py-4">暂无照片记录</p>';
+                return;
+            }
+            container.innerHTML = photosWithDate.map(p => `
+                <div class="relative group cursor-pointer overflow-hidden rounded-xl border border-gray-100 shadow-sm" onclick="jumpToDate('${p.date}')">
+                    <img src="${p.photo}" class="w-full h-32 object-cover transition duration-300 group-hover:scale-105">
+                    <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent text-white p-2 text-[10px] flex justify-between">
+                        <span class="font-bold">${p.date}</span>
+                        <span>${p.value} kg</span>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function renderChecklist() {
+            const container = document.getElementById('dynamicChecklist');
+            const log = appData.dailyLogs[selectedDate] || { diet: {}, workout: {} };
+            let html = '<div class="space-y-6">';
+            [{ title: '🥗 营养摄入', key: 'diet' }, { title: '💪 运动表现', key: 'workout' }].forEach(sec => {
+                html += `<div><h3 class="text-xs font-bold text-gray-400 mb-3 uppercase tracking-widest">${sec.title}</h3><div class="space-y-2">`;
+                appData.config[sec.key].forEach(item => {
+                    const checked = (log[sec.key] && log[sec.key][item]) ? 'checked' : '';
+                    html += `<label class="flex items-start justify-between p-4 bg-gray-50/50 border border-gray-100 rounded-xl cursor-pointer hover:bg-indigo-50 transition group">
+                        <span class="text-sm text-gray-700 font-medium group-hover:text-indigo-600 leading-relaxed pr-4">${item}</span>
+                        <input type="checkbox" onchange="toggleTask('${sec.key}', '${item}')" ${checked} class="w-6 h-6 mt-0.5 accent-indigo-600 rounded shrink-0">
+                    </label>`;
+                });
+                html += `</div></div>`;
+            });
+            container.innerHTML = html;
+            updateDayScore();
+        }
+
+        function toggleTask(type, item) {
+            if (!appData.dailyLogs[selectedDate]) appData.dailyLogs[selectedDate] = { diet: {}, workout: {} };
+            if (!appData.dailyLogs[selectedDate][type]) appData.dailyLogs[selectedDate][type] = {};
+            appData.dailyLogs[selectedDate][type][item] = !appData.dailyLogs[selectedDate][type][item];
+            updateDayScore();
+        }
+
+        function updateDayScore() {
+            const log = appData.dailyLogs[selectedDate];
+            const badge = document.getElementById('dayScore');
+            if (!log) { 
+                badge.innerText = "未开始"; 
+                badge.className = "text-[10px] px-2 py-0.5 rounded-full bg-gray-100 text-gray-400";
+                return; 
+            }
+            const total = appData.config.diet.length + appData.config.workout.length;
+            const done = (Object.values(log.diet || {}).filter(v => v).length + Object.values(log.workout || {}).filter(v => v).length);
+            badge.innerText = `完成 ${done}/${total}`;
+            if (done === total && total > 0) {
+                badge.className = "text-[10px] px-2 py-0.5 rounded-full bg-emerald-500 text-white";
+            } else {
+                badge.className = "text-[10px] px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-600";
+            }
+        }
+
+        function initChart() {
+            const ctx = document.getElementById('weightChart').getContext('2d');
+            weightChart = new Chart(ctx, {
+                type: 'line',
+                data: { labels: [], datasets: [{ label: '体重', data: [], borderColor: '#6366f1', tension: 0.4, fill: true, backgroundColor: 'rgba(99,102,241,0.05)' }]},
+                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } }
+            });
+            updateChart();
+        }
+
+        function updateChart() {
+            const recent = appData.weightLogs.slice(-7);
+            weightChart.data.labels = recent.map(l => l.date.slice(5));
+            weightChart.data.datasets[0].data = recent.map(l => l.value);
+            weightChart.update();
+        }
+
+        function updateStats() {
+            const logs = Object.keys(appData.dailyLogs);
+            if (logs.length > 0) {
+                let totalScore = 0;
+                logs.forEach(date => {
+                    const log = appData.dailyLogs[date];
+                    const total = appData.config.diet.length + appData.config.workout.length;
+                    const done = (Object.values(log.diet || {}).filter(v => v).length + Object.values(log.workout || {}).filter(v => v).length);
+                    totalScore += (total > 0 ? done / total : 0);
+                });
+                document.getElementById('statCompletion').innerText = Math.round((totalScore / logs.length) * 100) + "%";
+            }
+            if (appData.weightLogs.length >= 2) {
+                const diff = (appData.weightLogs[appData.weightLogs.length-1].value - appData.weightLogs[0].value).toFixed(1);
+                document.getElementById('statWeightChange').innerText = (diff > 0 ? '+' : '') + diff + "kg";
+            }
+        }
+
+        function renderHistory() {
+            const container = document.getElementById('historyLogs');
+            const dates = Object.keys(appData.dailyLogs).sort().reverse().slice(0, 10);
+            container.innerHTML = dates.map(d => `<div onclick="jumpToDate('${d}')" class="p-4 bg-gray-50 rounded-xl cursor-pointer hover:bg-indigo-50 transition flex justify-between items-center group text-xs">
+                <div class="flex flex-col">
+                    <span class="font-bold text-gray-700">${d}</span>
+                    <span class="text-[10px] text-gray-400">点击回顾</span>
+                </div>
+                <div class="bg-white p-2 rounded-full shadow-sm group-hover:bg-indigo-600 group-hover:text-white transition">
+                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                </div>
+            </div>`).join('') || '<p class="text-center text-gray-400 py-4">暂无历史</p>';
+        }
+
+        function jumpToDate(d) {
+            selectedDate = d;
+            document.getElementById('datePicker').value = d;
+            updateUI();
+        }
+
+        function toggleSettings() {
+            const modal = document.getElementById('settingsModal');
+            const isHidden = modal.style.display === 'none' || modal.style.display === '';
+            modal.style.display = isHidden ? 'flex' : 'none';
+            if (!isHidden) saveToCloud();
+        }
+
+        function renderSettings() {
+            [{k:'diet', n:'饮食'}, {k:'workout', n:'训练'}].forEach(t => {
+                document.getElementById(`${t.k}SettingsList`).innerHTML = `
+                    <h3 class="font-bold text-gray-400 mb-2 text-xs uppercase tracking-widest">配置 ${t.n} 计划项</h3>
+                    ${appData.config[t.k].map((item, i) => `<div class="flex justify-between items-center bg-gray-50 p-3 rounded-xl mb-1 text-sm font-medium"><span>${item}</span><button onclick="removeItem('${t.k}', ${i})" class="text-red-400 hover:text-red-600 p-1">✕</button></div>`).join('')}
+                    <div class="flex gap-2 mt-2 mb-4"><input id="new${t.k}" placeholder="添加新计划..." class="flex-1 p-3 border border-gray-100 rounded-xl text-sm outline-none focus:border-indigo-500 bg-gray-50"><button onclick="addItem('${t.k}')" class="bg-indigo-600 text-white px-4 rounded-xl text-sm font-bold">添加</button></div>
+                `;
+            });
+        }
+
+        function addItem(type) {
+            const input = document.getElementById(`new${type}`);
+            if (input.value) { appData.config[type].push(input.value); input.value = ''; renderSettings(); }
+        }
+
+        function removeItem(type, i) { appData.config[type].splice(i, 1); renderSettings(); }
+
+        function showToast(m) {
+            const t = document.getElementById('toast');
+            t.innerText = m; t.style.opacity = "1";
+            setTimeout(() => t.style.opacity = "0", 3000);
+        }
+
+        window.onload = () => { 
+            document.getElementById('datePicker').value = selectedDate; 
+        };
+    </script>
+</body>
+</html>
